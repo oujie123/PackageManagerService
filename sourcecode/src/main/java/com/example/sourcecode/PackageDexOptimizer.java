@@ -233,6 +233,7 @@ public class PackageDexOptimizer {
             final int dexoptFlags = getDexFlags(pkg, compilerFilter, options);
 
             for (String dexCodeIsa : dexCodeInstructionSets) {
+                // 执行具体路径的dex优化
                 int newResult = dexOptPath(pkg, path, dexCodeIsa, compilerFilter,
                         profileUpdated, classLoaderContexts[i], dexoptFlags, sharedGid,
                         packageStats, options.isDowngrade(), profileName, dexMetadataPath,
@@ -285,6 +286,7 @@ public class PackageDexOptimizer {
             // TODO: Consider adding 2 different APIs for primary and secondary dexopt.
             // installd only uses downgrade flag for secondary dex files and ignores it for
             // primary dex files.
+            // 进行优化
             mInstaller.dexopt(path, uid, pkg.packageName, isa, dexoptNeeded, oatDir, dexoptFlags,
                     compilerFilter, pkg.volumeUuid, classLoaderContext, pkg.applicationInfo.seInfo,
                     false /* downgrade*/, pkg.applicationInfo.targetSdkVersion,
@@ -604,6 +606,7 @@ public class PackageDexOptimizer {
             String classLoaderContext, boolean newProfile, boolean downgrade) {
         int dexoptNeeded;
         try {
+            // 调到native中去，dalvik_system_Dexfile.cc
             dexoptNeeded = DexFile.getDexOptNeeded(path, isa, compilerFilter, classLoaderContext,
                     newProfile, downgrade);
         } catch (IOException ioe) {

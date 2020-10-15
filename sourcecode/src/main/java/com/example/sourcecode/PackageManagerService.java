@@ -111,6 +111,7 @@ import static com.android.server.pm.PackageManagerServiceUtils.getCompressedFile
 import static com.android.server.pm.PackageManagerServiceUtils.getLastModifiedTime;
 import static com.android.server.pm.PackageManagerServiceUtils.logCriticalInfo;
 import static com.android.server.pm.PackageManagerServiceUtils.verifySignatures;
+import static com.example.sourcecode.PackageManager.INTENT_FILTER_DOMAIN_VERIFICATION_STATUS_ALWAYS;
 
 import android.Manifest;
 import android.annotation.IntDef;
@@ -2290,12 +2291,14 @@ public class PackageManagerService extends IPackageManager.Stub
     public static PackageManagerService main(Context context, Installer installer,
             boolean factoryTest, boolean onlyCore) {
         // Self-check for initial settings.
+        //检查编译相关的系统属性
         PackageManagerServiceCompilerMapping.checkProperties();
 
         //传入install和onlyCore来实例化PKMS
         PackageManagerService m = new PackageManagerService(context, installer,
                 factoryTest, onlyCore);
         m.enableSystemUserPackages();
+        //将PKMS服务增加到SM中
         ServiceManager.addService("package", m);
         final PackageManagerNative pmn = m.new PackageManagerNative();
         ServiceManager.addService("package_native", pmn);
@@ -2387,6 +2390,9 @@ public class PackageManagerService extends IPackageManager.Stub
 
     public PackageManagerService(Context context, Installer installer,
             boolean factoryTest, boolean onlyCore) {
+        //mInstallLock ：用来保护所有安装apk的访问权限，此操作通常涉及繁重的磁盘数据读写等操作，并且是单线程操作，故有时候会处理很慢。
+        //此锁不会在已经持有mPackages锁的情况下加锁的，反之，在已经持有mInstallLock锁的情况下，立即获取mPackages是安全的
+        //mPackages：用来解析内存中所有apk的package信息及相关状态时加锁
         LockGuard.installLock(mPackages, LockGuard.INDEX_PACKAGES);
         Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "create package manager");
         //============================第一阶段：启动PKMS================================
@@ -2420,7 +2426,9 @@ public class PackageManagerService extends IPackageManager.Stub
             mPermissionManager = PermissionManagerService.create(context,
                     mPackages /*externalLock*/);
             mDefaultPermissionPolicy = mPermissionManager.getDefaultPermissionGrantPolicy();
-            //创建Settings
+            //创建Settings，保存安装包信息，清除路径不存在的孤立应用，主要涉及/data/system/目录的
+            //packages.xml，packages-backup.xml，packages.list，packages-stopped.xml，packages-stoppedbackup.
+            //xml等文件。
             mSettings = new Settings(Environment.getDataDirectory(),
                     mPermissionManager.getPermissionSettings(), mPackages);
         }
@@ -2474,6 +2482,7 @@ public class PackageManagerService extends IPackageManager.Stub
         getDefaultDisplayMetrics(context, mMetrics);
 
         Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "get system config");
+        //创建SystemConfig实例，获取系统配置信息，配置共享lib库；
         SystemConfig systemConfig = SystemConfig.getInstance();
         mAvailableFeatures = systemConfig.getAvailableFeatures();
         Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
@@ -2484,14 +2493,19 @@ public class PackageManagerService extends IPackageManager.Stub
         synchronized (mInstallLock) {
         // writer
         synchronized (mPackages) {
+            //创建PackageManager的handler线程，循环处理外部安装相关消息。
+            //就是一个HandlerThread，在子线程处理事件
             mHandlerThread = new ServiceThread(TAG,
                     Process.THREAD_PRIORITY_BACKGROUND, true /*allowIo*/);
             mHandlerThread.start();
+            // 应用handler
             mHandler = new PackageHandler(mHandlerThread.getLooper());
+            // 进程记录handler
             mProcessLoggingHandler = new ProcessLoggingHandler();
+            //将应用处理handler设置一个看门狗，超时时间10分钟，如果超时会重新这个线程
             Watchdog.getInstance().addThread(mHandler, WATCHDOG_TIMEOUT);
             mInstantAppRegistry = new InstantAppRegistry(this);
-
+            //// 共享lib库配置
             ArrayMap<String, SystemConfig.SharedLibraryEntry> libConfig
                     = systemConfig.getSharedLibraries();
             final int builtInLibCount = libConfig.size();
@@ -2516,19 +2530,22 @@ public class PackageManagerService extends IPackageManager.Stub
                     }
                 }
             }
-
+            // 读取安装相关SELinux策略
             SELinuxMMAC.readInstallPolicy();
 
             Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "loadFallbacks");
+            // 返回栈加载
             FallbackCategoryProvider.loadFallbacks();
             Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
 
             Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "read user settings");
+            //读取并解析/data/system下的XML文件
             mFirstBoot = !mSettings.readLPw(sUserManager.getUsers(false));
             Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
 
             // Clean up orphaned packages for which the code path doesn't exist
             // and they are an update to a system app - caused by bug/32321269
+            // 清理代码路径不存在的孤立软件包
             final int packageSettingCount = mSettings.mPackages.size();
             for (int i = packageSettingCount - 1; i >= 0; i--) {
                 PackageSetting ps = mSettings.mPackages.valueAt(i);
@@ -2540,6 +2557,7 @@ public class PackageManagerService extends IPackageManager.Stub
             }
 
             if (!mOnlyCore && mFirstBoot) {
+                // 如果不是首次启动，也不是CORE应用，则拷贝预编译的DEX文件
                 requestCopyPreoptedFiles();
             }
 
@@ -2551,10 +2569,11 @@ public class PackageManagerService extends IPackageManager.Stub
             }
 
             long startTime = SystemClock.uptimeMillis();
-            //===========================第二阶段会扫描系统中所有应用===========================
+            //============第二阶段会扫描系统中所有应用，并且加入到对应的列表中============
             EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_SYSTEM_SCAN_START,
                     startTime);
 
+            //从init.rc中获取环境变量
             final String bootClassPath = System.getenv("BOOTCLASSPATH");
             final String systemServerClassPath = System.getenv("SYSTEMSERVERCLASSPATH");
 
@@ -2566,9 +2585,12 @@ public class PackageManagerService extends IPackageManager.Stub
                 Slog.w(TAG, "No SYSTEMSERVERCLASSPATH found!");
             }
 
+            //获取system/framework目录
             File frameworkDir = new File(Environment.getRootDirectory(), "framework");
 
+            // 获取内部版本
             final VersionInfo ver = mSettings.getInternalVersion();
+            // 判断fingerprint是否有更新
             mIsUpgrade = !Build.FINGERPRINT.equals(ver.fingerprint);
             if (mIsUpgrade) {
                 logCriticalInfo(Log.INFO,
@@ -2576,11 +2598,13 @@ public class PackageManagerService extends IPackageManager.Stub
             }
 
             // when upgrading from pre-M, promote system app permissions from install to runtime
+            //对于Android M之前版本升级上来的情况，需将系统应用程序权限从安装升级到运行时
             mPromoteSystemApps =
                     mIsUpgrade && ver.sdkVersion <= Build.VERSION_CODES.LOLLIPOP_MR1;
 
             // When upgrading from pre-N, we need to handle package extraction like first boot,
             // as there is no profiling data available.
+            // 对于Android N之前版本升级上来的情况，需像首次启动一样处理package
             mIsPreNUpgrade = mIsUpgrade && ver.sdkVersion < Build.VERSION_CODES.N;
 
             mIsPreNMR1Upgrade = mIsUpgrade && ver.sdkVersion < Build.VERSION_CODES.N_MR1;
@@ -2590,6 +2614,7 @@ public class PackageManagerService extends IPackageManager.Stub
 
             // save off the names of pre-existing system packages prior to scanning; we don't
             // want to automatically grant runtime permissions for new system apps
+            // 在扫描之前保存预先存在的系统package的名称，不希望自动为新系统应用授予运行时权限
             if (mPromoteSystemApps) {
                 Iterator<PackageSetting> pkgSettingIter = mSettings.mPackages.values().iterator();
                 while (pkgSettingIter.hasNext()) {
@@ -2600,12 +2625,13 @@ public class PackageManagerService extends IPackageManager.Stub
                 }
             }
 
+            // 解析package的缓存路径
             mCacheDir = preparePackageParserCache();
 
             // Set flag to monitor and not change apk file paths when
             // scanning install directories.
+            // 设置flag，不在扫描安装时更改文件路径
             int scanFlags = SCAN_BOOTING | SCAN_INITIAL;
-
             if (mIsUpgrade || mFirstBoot) {
                 scanFlags = scanFlags | SCAN_FIRST_BOOT_OR_UPGRADE;
             }
@@ -2614,6 +2640,11 @@ public class PackageManagerService extends IPackageManager.Stub
             // any apps.)
             // For security and version matching reason, only consider overlay packages if they
             // reside in the right directory.
+            // 首先扫描vendor/product/product_services的overlay目录下的apk
+            //路径包括：/vendor/overlay、/product/overlay、/product_services/overlay、/odm/overlay、/oem/overlay、/system/framework
+            //            /system/priv-app、/system/app、/vendor/priv-app、/vendor/app、/odm/priv-app、/odm/app、/oem/app、/oem/priv-app、
+            //            /product/priv-app、/product/app、/product_services/priv-app、/product_services/app、/product_services/priv-app
+            //
             //扫描传入目录的所有apk文件
             scanDirTracedLI(new File(VENDOR_OVERLAY_DIR),
                     mDefParseFlags
@@ -2654,7 +2685,7 @@ public class PackageManagerService extends IPackageManager.Stub
             mParallelPackageParserCallback.findStaticOverlayPackages();
 
             // Find base frameworks (resource packages without code).
-            //扫描fw中的apk
+            // 扫描fw中的apk
             scanDirTracedLI(frameworkDir,
                     mDefParseFlags
                     | PackageParser.PARSE_IS_SYSTEM_DIR,
@@ -2669,7 +2700,7 @@ public class PackageManagerService extends IPackageManager.Stub
             }
 
             // Collect privileged system packages.
-            //扫描特权目录下的apk
+            // 扫描特权目录下的apk
             final File privilegedAppDir = new File(Environment.getRootDirectory(), "priv-app");
             scanDirTracedLI(privilegedAppDir,
                     mDefParseFlags
@@ -2833,6 +2864,7 @@ public class PackageManagerService extends IPackageManager.Stub
             // Stub packages must either be replaced with full versions in the /data
             // partition or be disabled.
             final List<String> stubSystemApps = new ArrayList<>();
+            // 删掉不存在的package
             if (!mOnlyCore) {
                 // do this first before mucking with mPackages for the "expecting better" case
                 final Iterator<PackageParser.Package> pkgIterator = mPackages.values().iterator();
@@ -2851,6 +2883,7 @@ public class PackageManagerService extends IPackageManager.Stub
                      * If this is not a system app, it can't be a
                      * disable system app.
                      */
+                    // 如果不是系统应用，则不被允许disable
                     if ((ps.pkgFlags & ApplicationInfo.FLAG_SYSTEM) == 0) {
                         continue;
                     }
@@ -2858,6 +2891,7 @@ public class PackageManagerService extends IPackageManager.Stub
                     /*
                      * If the package is scanned, it's not erased.
                      */
+                    // 如果应用被扫描，则不允许被擦除
                     final PackageParser.Package scannedPkg = mPackages.get(ps.name);
                     if (scannedPkg != null) {
                         /*
@@ -2867,6 +2901,7 @@ public class PackageManagerService extends IPackageManager.Stub
                          * scanned package so the previously user-installed
                          * application can be scanned.
                          */
+                        //如果扫描出来的系统apk在禁用列表中，它将从扫描列表中删除，只能通过OTA再次添加进来
                         if (mSettings.isDisabledSystemPackageLPr(ps.name)) {
                             logCriticalInfo(Log.WARN,
                                     "Expecting better updated system app for " + ps.name
@@ -2896,11 +2931,13 @@ public class PackageManagerService extends IPackageManager.Stub
                                 mSettings.getDisabledSystemPkgLPr(ps.name);
                         if (disabledPs.codePath == null || !disabledPs.codePath.exists()
                                 || disabledPs.pkg == null) {
+                            //如果系统应用路径，apk包，代码都不存在的话，就把这个应用加到删除系统应用的列表中
                             possiblyDeletedUpdatedSystemApps.add(ps.name);
                         } else {
                             // We're expecting that the system app should remain disabled, but add
                             // it to expecting better to recover in case the data version cannot
                             // be scanned.
+                            //如果apk还在，希望系统应用程序应该保持禁用状态，但是如果数据版本无法被扫描，则添加到恢复列表中。
                             mExpectingBetter.put(disabledPs.name, disabledPs.codePath);
                         }
                     }
@@ -2908,11 +2945,13 @@ public class PackageManagerService extends IPackageManager.Stub
             }
 
             //delete tmp files
+            //删除临时文件
             deleteTempPackageFiles();
 
             final int cachedSystemApps = PackageParser.sCachedPackageReadCount.get();
 
             // Remove any shared userIDs that have no associated packages
+            //删除没有关联的UID标识
             mSettings.pruneSharedUsersLPw();
             final long systemScanTime = SystemClock.uptimeMillis() - startTime;
             final int systemPackagesCount = mPackages.size();
@@ -2926,7 +2965,7 @@ public class PackageManagerService extends IPackageManager.Stub
                         ((int) systemScanTime) / systemPackagesCount);
             }
             if (!mOnlyCore) {
-                //=======================第三阶段：扫描data目录下的数据   扫描/data/app目录
+                //=======================第三阶段：扫描data目录下的数据(用户自己安装的apk)   扫描/data/app目录
                 EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_DATA_SCAN_START,
                         SystemClock.uptimeMillis());
                 scanDirTracedLI(sAppInstallDir, 0, scanFlags | SCAN_REQUIRE_KNOWN, 0);
@@ -2934,6 +2973,8 @@ public class PackageManagerService extends IPackageManager.Stub
                 // Remove disable package settings for updated system apps that were
                 // removed via an OTA. If the update is no longer present, remove the
                 // app completely. Otherwise, revoke their system privileges.
+                // 这个for循环，移除通过OTA删除的更新系统应用程序的禁用package设置
+                // 如果更新不再存在，则完全删除该应用。否则，撤消其系统权限
                 for (int i = possiblyDeletedUpdatedSystemApps.size() - 1; i >= 0; --i) {
                     final String packageName = possiblyDeletedUpdatedSystemApps.get(i);
                     final PackageParser.Package pkg = mPackages.get(packageName);
@@ -2949,6 +2990,7 @@ public class PackageManagerService extends IPackageManager.Stub
                                 + " no longer exists; removing its data";
                         // Actual deletion of code and data will be handled by later
                         // reconciliation step
+                        //如果进入到这个if语句，说明被更新的APK不存在了，需要清理他的data数据，但是这里原生什么也没做，意思是没有真正删除原来被禁用apk的数据
                     } else {
                         // found an update; revoke system privileges
                         msg = "Updated system package " + packageName
@@ -2960,6 +3002,7 @@ public class PackageManagerService extends IPackageManager.Stub
 
                         // remove the package from the system and re-scan it without any
                         // special privileges
+                        //删除应用包，并且重新扫描原来的APK路径
                         removePackageLI(pkg, true);
                         try {
                             final File codePath = new File(pkg.applicationInfo.getCodePath());
@@ -2974,6 +3017,7 @@ public class PackageManagerService extends IPackageManager.Stub
                     // previously scanned and known to the system], but, we don't have
                     // a package [ie. there was an error scanning it from the /data
                     // partition], completely remove the package data.
+                    //删除应用包的数据
                     final PackageSetting ps = mSettings.mPackages.get(packageName);
                     if (ps != null && mPackages.get(packageName) == null) {
                         removePackageDataLIF(ps, null, null, 0, false);
@@ -2987,6 +3031,7 @@ public class PackageManagerService extends IPackageManager.Stub
                  * the userdata partition actually showed up. If they never
                  * appeared, crawl back and revive the system version.
                  */
+                // 确保所有在/data分区的应用都是真实存在的
                 for (int i = 0; i < mExpectingBetter.size(); i++) {
                     final String packageName = mExpectingBetter.keyAt(i);
                     if (!mPackages.containsKey(packageName)) {
@@ -3078,9 +3123,11 @@ public class PackageManagerService extends IPackageManager.Stub
                             continue;
                         }
 
+                        //通过以上判断之后，该应用确实真实可用的，然后就把他从不可用列表中移除
                         mSettings.enableSystemPackageLPw(packageName);
 
                         try {
+                            //重新扫描这个apk文件
                             scanPackageTracedLI(scanFile, reparseFlags, rescanFlags, 0, null);
                         } catch (PackageManagerException e) {
                             Slog.e(TAG, "Failed to parse original system package: "
@@ -3091,11 +3138,12 @@ public class PackageManagerService extends IPackageManager.Stub
 
                 // Uncompress and install any stubbed system applications.
                 // This must be done last to ensure all stubs are replaced or disabled.
+                // 解压缩并安装任何存根系统应用程序。这必须最后完成，以确保所有存根被替换或禁用。
                 installSystemStubPackages(stubSystemApps, scanFlags);
 
                 final int cachedNonSystemApps = PackageParser.sCachedPackageReadCount.get()
                                 - cachedSystemApps;
-
+                // 打印扫描所有data分区中APK的时间
                 final long dataScanTime = SystemClock.uptimeMillis() - systemScanTime - startTime;
                 final int dataPackagesCount = mPackages.size() - systemPackagesCount;
                 Slog.i(TAG, "Finished scanning non-system apps. Time: " + dataScanTime
@@ -3111,10 +3159,12 @@ public class PackageManagerService extends IPackageManager.Stub
             mExpectingBetter.clear();
 
             // Resolve the storage manager.
+            // 获取StorageManager的包名
             mStorageManagerPackage = getStorageManagerPackageName();
 
             // Resolve protected action filters. Only the setup wizard is allowed to
             // have a high priority filter for these actions.
+            // 处理受保护的action过滤器。只允许setup wizard（开机向导）为这些action设置高优先级过滤器
             mSetupWizardPackage = getSetupWizardPackageName();
             mComponentResolver.fixProtectedFilterPriorities();
 
@@ -3129,12 +3179,14 @@ public class PackageManagerService extends IPackageManager.Stub
 
             // Now that we know all of the shared libraries, update all clients to have
             // the correct library paths.
+            // 由于更新了所有共享库，更新所有的应用以确保这些更新库之后运行起没有问题
             updateAllSharedLibrariesLocked(null, Collections.unmodifiableMap(mPackages));
 
             for (SharedUserSetting setting : mSettings.getAllSharedUsersLPw()) {
                 // NOTE: We ignore potential failures here during a system scan (like
                 // the rest of the commands above) because there's precious little we
                 // can do about it. A settings error is reported, though.
+                //调整Abis让所有拥有sharedUserId的app都能调用
                 final List<String> changedAbiCodePath =
                         adjustCpuAbisForSharedUserLPw(setting.packages, null /*scannedPackage*/);
                 if (changedAbiCodePath != null && changedAbiCodePath.size() > 0) {
@@ -3149,11 +3201,13 @@ public class PackageManagerService extends IPackageManager.Stub
                 }
                 // Adjust seInfo to ensure apps which share a sharedUserId are placed in the same
                 // SELinux domain.
+                // 调整seInfo，确保拥有一个sharedUserId的app属于SeLinux的域中
                 setting.fixSeInfoLocked();
             }
 
             // Now that we know all the packages we are keeping,
             // read and update their last usage times.
+            // 更新用户的使用时间，数据埋点功能采集用户使用数据可以用到
             mPackageUsage.read(mPackages);
             mCompilerStats.read();
 
@@ -3170,11 +3224,13 @@ public class PackageManagerService extends IPackageManager.Stub
             // cases get permissions that the user didn't initially explicitly
             // allow...  it would be nice to have some better way to handle
             // this situation.
+            // 如果platform sdk从上次启动之后更新了，那需要重新给app更新权限
             final boolean sdkUpdated = (ver.sdkVersion != mSdkVersion);
             if (sdkUpdated) {
                 Slog.i(TAG, "Platform changed from " + ver.sdkVersion + " to "
                         + mSdkVersion + "; regranting permissions for internal storage");
             }
+            // 更新权限
             mPermissionManager.updateAllPermissions(
                     StorageManager.UUID_PRIVATE_INTERNAL, sdkUpdated, mPackages.values(),
                     mPermissionCallback);
@@ -3183,6 +3239,8 @@ public class PackageManagerService extends IPackageManager.Stub
             // If this is the first boot or an update from pre-M, and it is a normal
             // boot, then we need to initialize the default preferred apps across
             // all defined users.
+            // 如果是第一次启动，或者从Android M之前升级上来的系统，并且启动正常。
+            // 那需要在所有已定义的用户中初始化默认的首选应用程序
             if (!onlyCore && (mPromoteSystemApps || mFirstBoot)) {
                 for (UserInfo user : sUserManager.getUsers(true)) {
                     mSettings.applyDefaultPreferredAppsLPw(user.id);
@@ -3193,6 +3251,7 @@ public class PackageManagerService extends IPackageManager.Stub
             // Prepare storage for system user really early during boot,
             // since core system apps like SettingsProvider and SystemUI
             // can't wait for user to start
+            // 为系统用户准备内存，因为SettingsProvider和SystemUI不可能等待用户去启动
             final int storageFlags;
             if (StorageManager.isFileEncryptedNativeOrEmulated()) {
                 storageFlags = StorageManager.FLAG_STORAGE_DE;
@@ -3244,6 +3303,7 @@ public class PackageManagerService extends IPackageManager.Stub
             // Note that we do *not* clear the application profiles. These remain valid
             // across OTAs and are used to drive profile verification (post OTA) and
             // profile compilation (without waiting to collect a fresh set of profiles).
+            // 如果是在OTA之后首次启动，并且正常启动，那需要清除代码缓存目录，但不清除应用程序配置文件
             if (mIsUpgrade && !onlyCore) {
                 Slog.i(TAG, "Build fingerprint changed; clearing code caches");
                 for (int i = 0; i < mSettings.mPackages.size(); i++) {
@@ -3260,6 +3320,7 @@ public class PackageManagerService extends IPackageManager.Stub
 
             // Grandfather existing (installed before Q) non-system apps to hide
             // their icons in launcher.
+            // 安装Android-Q前的非系统应用程序在Launcher中隐藏他们的图标
             if (!onlyCore && mIsPreQUpgrade) {
                 Slog.i(TAG, "Whitelisting all existing apps to hide their icons");
                 int size = mSettings.mPackages.size();
@@ -3274,6 +3335,7 @@ public class PackageManagerService extends IPackageManager.Stub
             }
 
             // clear only after permissions and other defaults have been updated
+            // mExistingSystemPackages是在收到OTA之前跟踪现有的系统包列表，他将被清空，当权限和默认设置被更新处理完成之后
             mExistingSystemPackages.clear();
             mPromoteSystemApps = false;
 
@@ -3317,6 +3379,7 @@ public class PackageManagerService extends IPackageManager.Stub
             }
             // PermissionController hosts default permission granting and role management, so it's a
             // critical part of the core system.
+            // PermissionController主持这授予默认权限和角色管理，他是系统的关键组成部分
             mRequiredPermissionControllerPackage = getRequiredPermissionControllerLPr();
 
             // Initialize InstantAppRegistry's Instant App list for all users.
@@ -3360,6 +3423,10 @@ public class PackageManagerService extends IPackageManager.Stub
             // The usage file is expected to be small so loading and verifying it
             // should take a fairly small time compare to the other activities (e.g. package
             // scanning).
+            // 阅读并更新dex文件的用法
+            // 在PM init结束时执行此操作，以便所有程序包都已协调其数据目录
+            // 此时知道了包的代码路径，因此可以验证磁盘文件并构建内部缓存
+            // 使用文件预计很小，因此与其他活动（例如包扫描）相比，加载和验证它应该花费相当小的时间
             final Map<Integer, List<PackageInfo>> userPackages = new HashMap<>();
             for (int userId : userIds) {
                 userPackages.put(userId, getInstalledPackages(/*flags*/ 0, userId).getList());
@@ -3378,12 +3445,14 @@ public class PackageManagerService extends IPackageManager.Stub
         // are all flushed.  Not really needed, but keeps things nice and
         // tidy.
         Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "GC");
+        // 打开应用之后，及时回收处理
         Runtime.getRuntime().gc();
         Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
 
         // The initial scanning above does many calls into installd while
         // holding the mPackages lock, but we're mostly interested in yelling
         // once we have a booted system.
+        // 上面的初始扫描在持有mPackage锁的同时对installd进行了多次调用
         mInstaller.setWarnIfHeld(mPackages);
 
         PackageParser.readConfigUseRoundIcon(mContext.getResources());
@@ -9590,15 +9659,20 @@ public class PackageManagerService extends IPackageManager.Stub
         }
     }
 
+    /**
+     * 主要是执行磁盘清理工作，释放磁盘空间
+     */
     @Override
     public void performFstrimIfNeeded() {
         enforceSystemOrRoot("Only the system can request fstrim");
 
-        // Before everything else, see whether we need to fstrim.
+        // 在其他事情之前，看看我们是否需要fstrim
         try {
+            // 获取StorageManager对象
             IStorageManager sm = PackageHelper.getStorageManager();
             if (sm != null) {
                 boolean doTrim = false;
+                // 获取执行FTRIM间隔，默认是3天，可以通过setting provider更改这个时间
                 final long interval = Global.getLong(
                         mContext.getContentResolver(),
                         Global.FSTRIM_MANDATORY_INTERVAL,
@@ -9606,6 +9680,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 if (interval > 0) {
                     final long timeSinceLast = System.currentTimeMillis() - sm.lastMaintenance();
                     if (timeSinceLast > interval) {
+                        // 如果超过了三天就进行磁盘清理
                         doTrim = true;
                         Slog.w(TAG, "No disk maintenance in " + timeSinceLast
                                 + "; running immediately");
@@ -9624,6 +9699,9 @@ public class PackageManagerService extends IPackageManager.Stub
                         } catch (RemoteException e) {
                         }
                     }
+                    // 这里的sm是 StorageManagerService，发送消息H_FSTRIM给handler，然后再向vold发送fstrim命令
+                    // mHandler.sendMessage(mHandler.obtainMessage(H_FSTRIM, callback));
+                    // mConnector.execute("fstrim", cmd);
                     sm.runMaintenance();
                 }
             } else {
@@ -9639,26 +9717,35 @@ public class PackageManagerService extends IPackageManager.Stub
         enforceSystemOrRoot("Only the system can request package update");
 
         // We need to re-extract after an OTA.
+        // (1) 判断是否经过了OTA升级，如果OTA升级之后需要重新提取
         boolean causeUpgrade = isDeviceUpgrading();
 
         // First boot or factory reset.
         // Note: we also handle devices that are upgrading to N right now as if it is their
         //       first boot, as they do not have profile data.
+        //(2) 是否是第一次启动或是系统大版本升级
         boolean causeFirstBoot = isFirstBoot() || mIsPreNUpgrade;
 
         // We need to re-extract after a pruned cache, as AoT-ed files will be out of date.
+        //(3) 判断是否有清除过dalvik虚拟机的缓存
         boolean causePrunedCache = VMRuntime.didPruneDalvikCache();
 
+        //(4) 如果上面的三个都没有，那么就不进行任何操作,就是不进行dex优化
         if (!causeUpgrade && !causeFirstBoot && !causePrunedCache) {
             return;
         }
 
         List<PackageParser.Package> pkgs;
         synchronized (mPackages) {
+            //(5) 按照package的优先级进行排序，core app >system app > other app
+            // getPackagesForDexopt按dexopt排序的重要性对应用程序进行排序。重要的应用程序会被赋予更高的优先级，以防设备空间不足。
             pkgs = PackageManagerServiceUtils.getPackagesForDexopt(mPackages.values(), this);
         }
 
+        // 记录优化开始时间
         final long startTime = System.nanoTime();
+        // 进行dex优化
+        // 判断是否需要对package进行更新，如果需要更新那么按照优先级完成dex优化，最终调用Install的dexopt()进行dex优化
         final int[] stats = performDexOptUpgrade(pkgs, mIsPreNUpgrade /* showDialog */,
                     causeFirstBoot ? REASON_FIRST_BOOT : REASON_BOOT,
                     false /* bootComplete */);
@@ -9695,11 +9782,13 @@ public class PackageManagerService extends IPackageManager.Stub
         int numberOfPackagesFailed = 0;
         final int numberOfPackagesToDexopt = pkgs.size();
 
+        // 循环取出packages，进行优化
         for (PackageParser.Package pkg : pkgs) {
             numberOfPackagesVisited++;
 
             boolean useProfileForDexopt = false;
 
+            // 如果是第一次启动或者系统升级并且是系统应用
             if ((isFirstBoot() || isDeviceUpgrading()) && isSystemApp(pkg)) {
                 // Copy over initial preopt profiles since we won't get any JIT samples for methods
                 // that are already compiled.
@@ -9808,6 +9897,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 // TODO: This doesn't cover the upgrade case, we should check for this too.
                 dexoptFlags |= DexoptOptions.DEXOPT_INSTALL_WITH_DEX_METADATA_FILE;
             }
+            //  最终是调用 mInstaller.dexopt 完成优化的，installd守护进程，installer安装器和Installd通信
             int primaryDexOptStaus = performDexOptTraced(new DexoptOptions(
                     pkg.packageName,
                     pkgCompilationReason,
@@ -9815,12 +9905,15 @@ public class PackageManagerService extends IPackageManager.Stub
 
             switch (primaryDexOptStaus) {
                 case PackageDexOptimizer.DEX_OPT_PERFORMED:
+                    // dex优化完成的应用数
                     numberOfPackagesOptimized++;
                     break;
                 case PackageDexOptimizer.DEX_OPT_SKIPPED:
+                    // 跳过的应用数
                     numberOfPackagesSkipped++;
                     break;
                 case PackageDexOptimizer.DEX_OPT_FAILED:
+                    // 优化失败的应用数
                     numberOfPackagesFailed++;
                     break;
                 default:
@@ -9828,7 +9921,7 @@ public class PackageManagerService extends IPackageManager.Stub
                     break;
             }
         }
-
+        // 返回优化的结果记录
         return new int[] { numberOfPackagesOptimized, numberOfPackagesSkipped,
                 numberOfPackagesFailed };
     }
@@ -10056,6 +10149,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 }
                 if (depPackage != null) {
                     // TODO: Analyze and investigate if we (should) profile libraries.
+                    // 执行dex优化
                     pdo.performDexOpt(depPackage, instructionSets,
                             getOrCreateCompilerPackageStats(depPackage),
                             mDexManager.getPackageUseInfoOrDefault(depPackage.packageName),
@@ -13168,6 +13262,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 Slog.d(TAG, "Ephemeral install of " + activeInstallSession.getPackageName());
             }
         }
+        // 发送一个copy消息
         final Message msg = mHandler.obtainMessage(INIT_COPY);
         final InstallParams params = new InstallParams(activeInstallSession);
         params.setTraceMethod("installStage").setTraceCookie(System.identityHashCode(params));
@@ -14610,6 +14705,7 @@ public class PackageManagerService extends IPackageManager.Stub
                     request.args.doPreInstall(request.installResult.returnCode);
                 }
                 synchronized (mInstallLock) {
+                    // 安装
                     installPackagesTracedLI(installRequests);
                 }
                 for (InstallRequest request : installRequests) {
@@ -14850,6 +14946,7 @@ public class PackageManagerService extends IPackageManager.Stub
             handleReturnCode();
         }
 
+        // 跳到内部类 MultiPackageInstallParams
         abstract void handleStartCopy();
         abstract void handleReturnCode();
     }
@@ -15295,7 +15392,7 @@ public class PackageManagerService extends IPackageManager.Stub
                     }
                 }
             }
-
+            // 创建InstallArgs
             final InstallArgs args = createInstallArgs(this);
             mVerificationCompleted = true;
             mEnableRollbackCompleted = true;
@@ -15512,6 +15609,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 }
             }
 
+            // 验证APK没问题返回一个install成功  准备进入handleReturnCode方法，在handleReturnCode方法中调用InstallArgs.copyApk
             mRet = ret;
         }
 
@@ -15557,6 +15655,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 if (mRet == PackageManager.INSTALL_SUCCEEDED) {
                     mRet = mArgs.copyApk();
                 }
+                //   复制完成了APK 调用安装apk
                 processPendingInstall(mArgs, mRet);
             }
         }
@@ -15757,6 +15856,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 return PackageManager.INSTALL_FAILED_INSUFFICIENT_STORAGE;
             }
 
+            //
             int ret = PackageManagerServiceUtils.copyPackage(
                     origin.file.getAbsolutePath(), codeFile);
             if (ret != PackageManager.INSTALL_SUCCEEDED) {
@@ -17052,6 +17152,8 @@ public class PackageManagerService extends IPackageManager.Stub
                     Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "commitPackages");
                     commitRequest = new CommitRequest(reconciledPackages,
                             sUserManager.getUserIds());
+                    // 提交所有扫描的包并更新系统状态。这是安装流中唯一可以修改系统状态的
+                    // 地方，必须在此阶段之前确定所有可预测的错误。
                     commitPackagesLocked(commitRequest);
                     success = true;
                 } finally {
@@ -17063,6 +17165,7 @@ public class PackageManagerService extends IPackageManager.Stub
                     Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
                 }
             }
+            // commit
             executePostCommitSteps(commitRequest);
         } finally {
             if (!success) {
@@ -17099,7 +17202,10 @@ public class PackageManagerService extends IPackageManager.Stub
                             & PackageManagerService.SCAN_AS_INSTANT_APP) != 0);
             final PackageParser.Package pkg = reconciledPkg.pkgSetting.pkg;
             final String packageName = pkg.packageName;
+            // 进行安装
+            // prepareAppDataAfterInstallLIF()-- prepareAppDataLIF()--prepareAppDataLeafLIF()--[Installer.java].createAppData()
             prepareAppDataAfterInstallLIF(pkg);
+            // 如果需要替换安装，则需要清楚原有的APP数据
             if (reconciledPkg.prepareResult.clearCodeCache) {
                 clearAppDataLIF(pkg, UserHandle.USER_ALL, FLAG_STORAGE_DE | FLAG_STORAGE_CE
                         | FLAG_STORAGE_EXTERNAL | Installer.FLAG_CLEAR_CODE_CACHE_ONLY);
@@ -17112,6 +17218,8 @@ public class PackageManagerService extends IPackageManager.Stub
             // Prepare the application profiles for the new code paths.
             // This needs to be done before invoking dexopt so that any install-time profile
             // can be used for optimizations.
+            // 为新的代码路径准备应用程序配置文件。这需要在调用dexopt之前完成，以便任何安装时配
+            // 置文件都可以用于优化。
             mArtManagerService.prepareAppProfiles(
                     pkg,
                     resolveUserIds(reconciledPkg.installArgs.user.getIdentifier()),
@@ -17136,6 +17244,7 @@ public class PackageManagerService extends IPackageManager.Stub
             // continuous progress to the useur instead of mysteriously blocking somewhere in the
             // middle of running an instant app. The default behaviour can be overridden
             // via gservices.
+            // 安装APK,并为新的代码路径准备应用程序配置文件,并再次检查是否需要dex优化
             final boolean performDexopt =
                     (!instantApp || Global.getInt(mContext.getContentResolver(),
                     Global.INSTANT_APP_DEXOPT_ENABLED, 0) != 0)
@@ -17158,6 +17267,7 @@ public class PackageManagerService extends IPackageManager.Stub
                         REASON_INSTALL,
                         DexoptOptions.DEXOPT_BOOT_COMPLETE
                                 | DexoptOptions.DEXOPT_INSTALL_WITH_DEX_METADATA_FILE);
+                // 执行dex优化
                 mPackageDexOptimizer.performDexOpt(pkg,
                         null /* instructionSets */,
                         getOrCreateCompilerPackageStats(pkg),
@@ -21578,12 +21688,14 @@ public class PackageManagerService extends IPackageManager.Stub
 
         // Disable any carrier apps. We do this very early in boot to prevent the apps from being
         // disabled after already being started.
+        // 我们在启动时禁用任何运营商应用程序，以防止应用程序在启动后被禁用。
         CarrierAppUtils.disableCarrierAppsUntilPrivileged(mContext.getOpPackageName(), this,
                 mContext.getContentResolver(), UserHandle.USER_SYSTEM);
 
         disableSkuSpecificApps();
 
         // Read the compatibilty setting when the system is ready.
+        // 当系统准备就绪时，读取兼容性设置
         boolean compatibilityModeEnabled = Global.getInt(
                 mContext.getContentResolver(),
                 Global.COMPATIBILITY_MODE, 1) == 1;
@@ -22962,6 +23074,7 @@ public class PackageManagerService extends IPackageManager.Stub
 
             if (ps.getInstalled(user.id)) {
                 // TODO: when user data is locked, mark that we're still dirty
+                // 准备数据
                 prepareAppDataLIF(pkg, user.id, flags);
             }
         }
@@ -23025,6 +23138,7 @@ public class PackageManagerService extends IPackageManager.Stub
         final String seInfo = app.seInfo + (app.seInfoUser != null ? app.seInfoUser : "");
         long ceDataInode = -1;
         try {
+            // 创建appdata
             ceDataInode = mInstaller.createAppData(volumeUuid, packageName, userId, flags,
                     appId, seInfo, app.targetSdkVersion);
         } catch (InstallerException e) {
@@ -23060,6 +23174,7 @@ public class PackageManagerService extends IPackageManager.Stub
         // manually copying them in #performDexOptUpgrade. When we do that we should have a more
         // granular check here and only update the existing profiles.
         if (mIsUpgrade || mFirstBoot || (userId != UserHandle.USER_SYSTEM)) {
+            // 更新设置
             mArtManagerService.prepareAppProfiles(pkg, userId,
                 /* updateReferenceProfileContent= */ false);
         }
@@ -23072,7 +23187,7 @@ public class PackageManagerService extends IPackageManager.Stub
                 }
             }
         }
-
+        // 更新设置，更新安装锁
         prepareAppDataContentsLeafLIF(pkg, userId, flags);
     }
 

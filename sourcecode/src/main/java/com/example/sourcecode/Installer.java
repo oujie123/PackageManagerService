@@ -173,6 +173,7 @@ public class Installer extends SystemService {
             String seInfo, int targetSdkVersion) throws InstallerException {
         if (!checkBeforeRemote()) return -1;
         try {
+            // 调用到Installd.createAppData   安装完成后，更新设置，更新安装锁
             return mInstalld.createAppData(uuid, packageName, userId, flags, appId, seInfo,
                     targetSdkVersion);
         } catch (Exception e) {

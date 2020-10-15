@@ -402,6 +402,7 @@ public class PackageInstallerActivity extends OverlayTouchActivity implements On
         final Uri packageUri;
 
         if (PackageInstaller.ACTION_CONFIRM_PERMISSIONS.equals(intent.getAction())) {
+            //  开始是空的，sessionId == -1
             final int sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1);
             final PackageInstaller.SessionInfo info = mInstaller.getSessionInfo(sessionId);
             if (info == null || !info.sealed || info.resolvedBaseCodePath == null) {
@@ -624,6 +625,7 @@ public class PackageInstallerActivity extends OverlayTouchActivity implements On
                         mInstaller.setPermissionsResult(mSessionId, true);
                         finish();
                     } else {
+                        // 开始安装
                         startInstall();
                     }
                 } else {
@@ -668,6 +670,7 @@ public class PackageInstallerActivity extends OverlayTouchActivity implements On
             newIntent.addFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT);
         }
         if(localLOGV) Log.i(TAG, "downloaded app uri="+mPackageURI);
+        // 启动android.intent.extra.INSTALLER_PACKAGE_NAME   InstallInstalling Activity
         startActivity(newIntent);
         finish();
     }

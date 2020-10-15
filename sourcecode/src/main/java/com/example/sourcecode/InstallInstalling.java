@@ -216,6 +216,8 @@ public class InstallInstalling extends Activity {
             PackageInstaller.SessionInfo sessionInfo = installer.getSessionInfo(mSessionId);
 
             if (sessionInfo != null && !sessionInfo.isActive()) {
+                // 在这里面会调用  PackageInstaller.Session.commit()
+                // 最终会通过AIDL 调到PackageInstallerSession.commit()中
                 mInstallingTask = new InstallingAsyncTask();
                 mInstallingTask.execute();
             } else {

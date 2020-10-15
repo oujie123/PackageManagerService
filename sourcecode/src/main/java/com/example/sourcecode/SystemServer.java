@@ -718,6 +718,7 @@ public final class SystemServer {
 
         // Only run "core" apps if we're encrypting the device.
         //TODO =====================step2:获取用户是否设置了密码======================================
+        // 如果加密了，则mOnlyCore为true，系统只会加载核心服务
         String cryptState = VoldProperties.decrypt().orElse("");
         if (ENCRYPTING_STATE.equals(cryptState)) {
             Slog.w(TAG, "Detected encryption in progress - only parsing core apps");
@@ -735,7 +736,7 @@ public final class SystemServer {
         traceBeginAndSlog("StartPackageManagerService");
         try {
             Watchdog.getInstance().pauseWatchingCurrentThread("packagemanagermain");
-            //TODO =====================step3:启动PKMS====================================
+            //TODO =====================step3:启动PKMS，实例化PKMS====================================
             mPackageManagerService = PackageManagerService.main(mSystemContext, installer,
                     mFactoryTestMode != FactoryTest.FACTORY_TEST_OFF, mOnlyCore);
         } finally {
@@ -751,6 +752,7 @@ public final class SystemServer {
         // Manages A/B OTA dexopting. This is a bootstrap service as we need it to rename
         // A/B artifacts after boot, before anything else might touch/need them.
         // Note: this isn't needed during decryption (we don't have /data anyways).
+        //TODO====================step4:如果没有加密，进行OTA dex优化======================
         if (!mOnlyCore) {
             boolean disableOtaDexopt = SystemProperties.getBoolean("config.disable_otadexopt",
                     false);

@@ -543,6 +543,17 @@ public final class Settings {
         mPermissions.addAppOpPackage(permName, packageName);
     }
 
+    /**
+     * mSettings.addSharedUserLPw("android.uid.system", //字符串
+     *                            Process.SYSTEM_UID, //系统进程使用的用户id，值为1000
+     *                            ApplicationInfo.FLAG_SYSTEM, //标志系统 Package
+     *                            ApplicationInfo.PRIVATE_FLAG_PRIVILEGED); //特权系统应用
+     * @param name
+     * @param uid
+     * @param pkgFlags
+     * @param pkgPrivateFlags
+     * @return
+     */
     SharedUserSetting addSharedUserLPw(String name, int uid, int pkgFlags, int pkgPrivateFlags) {
         SharedUserSetting s = mSharedUsers.get(name);
         if (s != null) {
@@ -556,6 +567,7 @@ public final class Settings {
         s = new SharedUserSetting(name, pkgFlags, pkgPrivateFlags);
         s.userId = uid;
         if (registerExistingAppIdLPw(uid, s, name)) {
+            //将要共享的配置保存在mSharedUsers
             mSharedUsers.put(name, s);
             return s;
         }
@@ -2902,6 +2914,19 @@ public final class Settings {
         bp.writeLPr(serializer);
     }
 
+    /**
+     * 1) "/data/system/packages.xml"
+     * 2) "/data/system/packages-backup.xml"
+     * 3) "/data/system/packages.list"
+     * 4) "/data/system/packages-stopped.xml"
+     * 5) "/data/system/packages-stopped-backup.xml"
+     *
+     * 1和2：PKMS 扫描完目标文件夹后会创建该文件。当系统进行程序安装、卸载和更新等操作时，均会更新该文件。该文件保存了系统中与 package 相关的一些信息。
+     * 3：packages.list：描述系统中存在的所有非系统自带的 APK 的信息。当这些程序有变动时，PKMS 就会更新该文件
+     * 4和5：从系统自带的设置程序中进入应用程序页面，然后在选择强制停止（ForceStop）某个应用时，系统会将该应用的相关信息记录到此文件中。也就是该文件保存系统中被用户强制停止的 Package 的信息。
+     * @param users
+     * @return
+     */
     boolean readLPw(@NonNull List<UserInfo> users) {
         FileInputStream str = null;
         if (mBackupSettingsFilename.exists()) {
@@ -2942,6 +2967,7 @@ public final class Settings {
                 }
                 str = new FileInputStream(mSettingsFilename);
             }
+            //解析"/data/system/packages.xml"
             XmlPullParser parser = Xml.newPullParser();
             parser.setInput(str, StandardCharsets.UTF_8.name());
 
@@ -2975,6 +3001,7 @@ public final class Settings {
                 } else if (tagName.equals("permission-trees")) {
                     mPermissions.readPermissionTrees(parser);
                 } else if (tagName.equals("shared-user")) {
+                    //创建 SharedUserSetting 对象并添加到 Settings 的成员变量 mSharedUsers 中，在 Android 系统中，多个 package 通过设置 sharedUserId 属性可以运行在同一个进程，共享同一个 UID
                     readSharedUserLPw(parser);
                 } else if (tagName.equals("preferred-packages")) {
                     // no longer used.
@@ -3974,6 +4001,7 @@ public final class Settings {
                                 + " has bad userId " + idStr + " at "
                                 + parser.getPositionDescription());
             } else {
+                //创建并注册SharedUserSetting
                 if ((su = addSharedUserLPw(name.intern(), userId, pkgFlags, pkgPrivateFlags))
                         == null) {
                     PackageManagerService

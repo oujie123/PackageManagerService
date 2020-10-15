@@ -363,6 +363,7 @@ public class SystemConfig {
         }
 
         // Read platform permissions last so it will take precedence
+        // 最后读取platform.xml
         if (platformFile != null) {
             readPermissionsFromXml(platformFile, permissionFlag);
         }
@@ -413,6 +414,7 @@ public class SystemConfig {
                 }
 
                 String name = parser.getName();
+                //解析 group 标签，前面介绍的 XML 文件中没有单独使用该标签的地方，只有platform.xml会有这个标签
                 if ("group".equals(name) && allowAll) {
                     String gidStr = parser.getAttributeValue(null, "gid");
                     if (gidStr != null) {
@@ -465,6 +467,7 @@ public class SystemConfig {
                         perms = new ArraySet<String>();
                         mSystemPermissions.put(uid, perms);
                     }
+                    // 将一个权限赋予给这个UID
                     perms.add(perm);
                     XmlUtils.skipCurrentTag(parser);
 
