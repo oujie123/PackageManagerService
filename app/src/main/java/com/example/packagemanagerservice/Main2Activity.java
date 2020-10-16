@@ -27,7 +27,7 @@ public class Main2Activity extends AppCompatActivity {
     }
 
     // 申请权限  函数名可以随意些
-    @Permission(value = Manifest.permission.ACCESS_FINE_LOCATION, requestCode = 200)
+    @Permission(value = Manifest.permission.READ_CONTACTS, requestCode = 200)
     public void testRequest() {
         Toast.makeText(this, "权限申请成功...", Toast.LENGTH_SHORT).show();
         // 100 行

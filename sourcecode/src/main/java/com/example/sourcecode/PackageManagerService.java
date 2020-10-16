@@ -1768,12 +1768,14 @@ public class PackageManagerService extends IPackageManager.Stub
         public void onGidsChanged(int appId, int userId) {
             mHandler.post(() -> killUid(appId, userId, KILL_APP_REASON_GIDS_CHANGED));
         }
+        //授权完成会回调到这里来
         @Override
         public void onPermissionGranted(int uid, int userId) {
             mOnPermissionChangeListeners.onPermissionsChanged(uid);
 
             // Not critical; if this is lost, the application has to request again.
             synchronized (mPackages) {
+                //最终保存到xml中
                 mSettings.writeRuntimePermissionsForUserLPr(userId, false);
             }
         }
@@ -5721,6 +5723,7 @@ public class PackageManagerService extends IPackageManager.Stub
     private int checkUidPermissionImpl(String permName, int uid) {
         synchronized (mPackages) {
             final String[] packageNames = getPackagesForUid(uid);
+            // 可以拿到apk的所有东西，把pkg丢给权限管理服务
             PackageParser.Package pkg = null;
             final int N = packageNames == null ? 0 : packageNames.length;
             for (int i = 0; pkg == null && i < N; i++) {

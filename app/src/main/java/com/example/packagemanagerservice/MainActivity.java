@@ -33,6 +33,7 @@ public class MainActivity extends AppCompatActivity {
 
         // 先检查之前有没有申请过这个READ_CONTACTS权限，如果么有申请过，才申请
         // Here, thisActivity is the current activity
+        // 检查权限
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             Log.i(TAG,"checkSelfPermission");
 
@@ -44,6 +45,7 @@ public class MainActivity extends AppCompatActivity {
                 // this thread waiting for the user's response! After the user
                 // sees the explanation, try again to request the permission.
                 // 申请 联系人读取权限
+                // 申请权限从此方法开始
                 ActivityCompat.requestPermissions(this,
                         new String[]{Manifest.permission.READ_CONTACTS},
                         MY_PERMISSIONS_REQUEST_READ_CONTACTS);

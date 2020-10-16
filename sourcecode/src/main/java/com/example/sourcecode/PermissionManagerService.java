@@ -325,6 +325,7 @@ public class PermissionManagerService {
         return PackageManager.PERMISSION_DENIED;
     }
 
+    // 检查PackageParser.Package中有没有之前申请过的权限，如果有的返回PERMISSION_GRANTED，否则返回PERMISSION_DENIED
     private int checkUidPermission(String permName, PackageParser.Package pkg, int uid,
             int callingUid) {
         final int callingUserId = UserHandle.getUserId(callingUid);

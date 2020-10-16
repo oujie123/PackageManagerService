@@ -5120,6 +5120,7 @@ public final class Settings {
 
     public void writeRuntimePermissionsForUserLPr(int userId, boolean sync) {
         if (sync) {
+            //同步写入
             mRuntimePermissionsPersistence.writePermissionsForUserSyncLPr(userId);
         } else {
             mRuntimePermissionsPersistence.writePermissionsForUserAsyncLPr(userId);
@@ -5183,6 +5184,7 @@ public final class Settings {
             writePermissionsForUserAsyncLPr(userId);
         }
 
+        //同步写入
         public void writePermissionsForUserSyncLPr(int userId) {
             mHandler.removeMessages(userId);
             writePermissionsSync(userId);
@@ -5222,6 +5224,7 @@ public final class Settings {
         }
 
         private void writePermissionsSync(int userId) {
+            // system/users/package-perms-
             AtomicFile destination = new AtomicFile(getUserRuntimePermissionsFile(userId),
                     "package-perms-" + userId);
 
