@@ -1035,10 +1035,12 @@ public final class SystemServer {
             traceEnd();
 
             traceBeginAndSlog("SetWindowManagerService");
+            // 关联AMS 和WMS
             mActivityManagerService.setWindowManager(wm);
             traceEnd();
 
             traceBeginAndSlog("WindowManagerServiceOnInitReady");
+            // WMS初始化显示尺寸信息，结束WMS会根据AMS进行一次configure
             wm.onInitReady();
             traceEnd();
 
@@ -1141,6 +1143,7 @@ public final class SystemServer {
 
         traceBeginAndSlog("MakeDisplayReady");
         try {
+            // 显示初始化结束
             wm.displayReady();
         } catch (Throwable e) {
             reportWtf("making display ready", e);
